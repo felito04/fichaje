@@ -34,10 +34,13 @@ class TodayState {
     required this.entries,
     required this.userId,
     required this.displayName,
+    required this.userEmail,
+    required this.userName,
   });
 
   factory TodayState.fromJson(Map<String, dynamic> json, String fallbackName) {
     final user = json['user'] as Map<String, dynamic>?;
+    final userName = (user?['display_name'] as String?)?.trim();
     return TodayState(
       entries:
           (json['entries'] as List<dynamic>? ?? const [])
@@ -45,15 +48,17 @@ class TodayState {
               .toList()
             ..sort((a, b) => a.time.compareTo(b.time)),
       userId: user?['id'] as String?,
-      displayName: (user?['display_name'] as String?)?.trim().isNotEmpty == true
-          ? user!['display_name'] as String
-          : fallbackName,
+      displayName: userName?.isNotEmpty == true ? userName! : fallbackName,
+      userEmail: (user?['email'] as String?)?.trim(),
+      userName: userName?.isNotEmpty == true ? userName : null,
     );
   }
 
   final List<TimeEntry> entries;
   final String? userId;
   final String displayName;
+  final String? userEmail;
+  final String? userName;
   TimeEntry? get last => entries.isEmpty ? null : entries.last;
 
   WorkStatus get status => switch (last?.type) {
@@ -122,6 +127,7 @@ class AppConfig {
     required this.baseUrl,
     required this.tabletId,
     required this.mifareSectors,
+    this.biometricAdminEnabled = true,
     this.latitude,
     this.longitude,
   });
@@ -129,6 +135,7 @@ class AppConfig {
   final String baseUrl;
   final String tabletId;
   final List<int> mifareSectors;
+  final bool biometricAdminEnabled;
   final double? latitude;
   final double? longitude;
   bool get hasLocation => latitude != null && longitude != null;
@@ -137,6 +144,7 @@ class AppConfig {
     String? baseUrl,
     String? tabletId,
     List<int>? mifareSectors,
+    bool? biometricAdminEnabled,
     double? latitude,
     double? longitude,
     bool clearLocation = false,
@@ -144,6 +152,7 @@ class AppConfig {
     baseUrl: baseUrl ?? this.baseUrl,
     tabletId: tabletId ?? this.tabletId,
     mifareSectors: mifareSectors ?? this.mifareSectors,
+    biometricAdminEnabled: biometricAdminEnabled ?? this.biometricAdminEnabled,
     latitude: clearLocation ? null : latitude ?? this.latitude,
     longitude: clearLocation ? null : longitude ?? this.longitude,
   );

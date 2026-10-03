@@ -97,4 +97,80 @@ void main() {
     );
     expect(attempts, 1);
   });
+
+  test('incident payload is sent once without photos or idempotency', () async {
+    final dio = Dio(BaseOptions(baseUrl: config.baseUrl));
+    var attempts = 0;
+    Map<String, dynamic>? sent;
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          attempts++;
+          sent = options.data as Map<String, dynamic>;
+          handler.resolve(
+            Response(
+              requestOptions: options,
+              statusCode: 201,
+              data: {
+                'bug_report': {'id': 'bug_1'},
+              },
+            ),
+          );
+        },
+      ),
+    );
+
+    final id = await MedusaApi(baseUrl: config.baseUrl, dio: dio)
+        .submitTimeEntryIncident(
+          session,
+          title: '[Fichaje] Olvido',
+          description: 'Descripción',
+          userEmail: 'user@example.com',
+          userName: 'Usuario',
+          sourceUrl: '${config.baseUrl}/app/time-entry?origen=quiosco-nfc',
+        );
+
+    expect(id, 'bug_1');
+    expect(attempts, 1);
+    expect(sent?['type'], 'bug');
+    expect(sent, isNot(contains('photos')));
+    expect(sent, isNot(contains('idempotency_key')));
+  });
+
+  test('incident network failure is never retried', () async {
+    final dio = Dio(BaseOptions(baseUrl: config.baseUrl));
+    var attempts = 0;
+    dio.interceptors.add(
+      InterceptorsWrapper(
+        onRequest: (options, handler) {
+          attempts++;
+          handler.reject(
+            DioException(
+              requestOptions: options,
+              type: DioExceptionType.connectionTimeout,
+            ),
+          );
+        },
+      ),
+    );
+
+    await expectLater(
+      MedusaApi(baseUrl: config.baseUrl, dio: dio).submitTimeEntryIncident(
+        session,
+        title: '[Fichaje] Olvido',
+        description: 'Descripción',
+        userEmail: 'user@example.com',
+        userName: 'Usuario',
+        sourceUrl: '${config.baseUrl}/app/time-entry?origen=quiosco-nfc',
+      ),
+      throwsA(
+        isA<AppException>().having(
+          (error) => error.message,
+          'message',
+          contains('No se pudo confirmar el envío'),
+        ),
+      ),
+    );
+    expect(attempts, 1);
+  });
 }

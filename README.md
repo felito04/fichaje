@@ -10,10 +10,11 @@ Incluye:
 - cliente Medusa para `login`, `today`, entrada, salida y pausas, con timeout de 10 segundos y un reintento que conserva la misma clave de idempotencia;
 - cierre seguro de una pausa antes de fichar una salida;
 - sobre `MUSF` v1 con AES-256-GCM, nonce aleatorio, UID como AAD y rotación de claves;
-- almacenamiento de claves y PIN mediante Android Keystore (`flutter_secure_storage`);
+- almacenamiento de claves y PIN mediante Android Keystore (`flutter_secure_storage`) y acceso administrativo opcional con huella o reconocimiento facial;
 - drivers intercambiables para MIFARE Classic 1K y NDEF;
 - protección de escritura por contraseña para NTAG213/215/216 detectados mediante `GET_VERSION`;
-- administración para validar usuarios, programar/verificar/borrar tarjetas, diagnosticar tecnologías y sectores, configurar staging/producción y transferir claves por QR;
+- administración para validar usuarios, programar/verificar/borrar o formatear tarjetas, diagnosticar tecnologías y sectores, configurar staging/producción y transferir claves por QR;
+- reporte de incidencias de fichaje identificado mediante la tarjeta, con fecha/hora afectada, resumen y envío único a Bug reports de Medusa;
 - modo inmersivo, pantalla encendida, screen pinning/Lock Task y receptor de arranque;
 - pruebas unitarias del estado diario y del sobre cifrado, incluido el rechazo al copiarlo a otro UID.
 
@@ -48,6 +49,7 @@ El receptor `BOOT_COMPLETED` intenta abrir la app al arrancar. Las versiones rec
 ## Seguridad de tarjetas
 
 - MIFARE nunca toca el sector 0 ni sectores fuera de la lista configurada. Solo reutiliza sectores vacíos con clave de fábrica o sectores que ya pertenecen a esta app.
+- El formateo MIFARE vacía únicamente los sectores configurados que todavía usan la clave de fábrica o una clave de esta app; omite sectores protegidos por claves ajenas.
 - Las claves A/B MIFARE se derivan de la clave maestra y del UID. El tráiler usa los bits `FF 07 80 69`, comprobados antes de cada escritura.
 - NDEF usa un registro MIME `application/vnd.myurbanscoot.fichaje`. Solo los modelos NTAG21x reconocidos reciben comandos de protección; otros tags NDEF no reciben escrituras de configuración propietarias.
 - La contraseña NTAG evita sobrescrituras accidentales, pero no convierte NTAG ni MIFARE Classic en tarjetas criptográficamente resistentes a clonación.

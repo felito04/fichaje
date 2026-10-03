@@ -93,8 +93,21 @@ abstract class CardDriver {
   Future<Uint8List?> readPayload(DetectedCard card);
   Future<void> writePayload(DetectedCard card, Uint8List payload);
   Future<void> erasePayload(DetectedCard card);
+  Future<CardFormatResult> formatStorage(DetectedCard card);
   Future<bool> ownsStorage(DetectedCard card);
   Future<CardDiagnostic> diagnose(DetectedCard card);
+}
+
+class CardFormatResult {
+  const CardFormatResult({
+    required this.driverId,
+    required this.formattedUnits,
+    required this.skippedUnits,
+  });
+
+  final String driverId;
+  final int formattedUnits;
+  final int skippedUnits;
 }
 
 class CardDiagnostic {
@@ -231,6 +244,16 @@ class NdefDriver implements CardDriver {
     final ntag = await _detectNtag(card);
     if (ntag != null) await _disableOwnedProtection(card, ntag);
     await ndef.writeNdefMessage(const NdefMessage(records: []));
+  }
+
+  @override
+  Future<CardFormatResult> formatStorage(DetectedCard card) async {
+    await erasePayload(card);
+    return const CardFormatResult(
+      driverId: 'ndef',
+      formattedUnits: 1,
+      skippedUnits: 0,
+    );
   }
 
   @override
@@ -571,6 +594,70 @@ class MifareClassicDriver implements CardDriver {
       }
       await tag.writeBlock(blockIndex: sector * 4 + 3, data: factoryTrailer);
     }
+  }
+
+  @override
+  Future<CardFormatResult> formatStorage(DetectedCard card) async {
+    final tag = MifareClassicAndroid.from(card.handle as NfcTag);
+    if (tag == null) {
+      throw const AppException('La tarjeta no es MIFARE Classic 1K.');
+    }
+    final factoryTrailer = Uint8List.fromList([
+      ..._factoryKey,
+      ..._access,
+      ..._factoryKey,
+    ]);
+    _validateTrailer(factoryTrailer);
+    var formatted = 0;
+    var skipped = 0;
+    for (final sector in sectors) {
+      // `sectors` is validated as 1–15 in settings, so the manufacturer sector
+      // (sector 0) can never be modified by this operation.
+      final access = await _accessFor(tag, sector, card.uid);
+      Uint8List? authKey;
+      if (access.state == MifareSectorState.appOwned) {
+        authKey = await vault.deriveMifareKey(
+          card.uid,
+          keyA: true,
+          keyId: access.keyId,
+        );
+      } else if (await tag.authenticateSectorWithKeyA(
+        sectorIndex: sector,
+        key: _factoryKey,
+      )) {
+        // This includes empty sectors and sectors containing old data while
+        // retaining the factory key. Both can be safely returned to empty.
+        authKey = _factoryKey;
+      }
+      if (authKey == null ||
+          !await tag.authenticateSectorWithKeyA(
+            sectorIndex: sector,
+            key: authKey,
+          )) {
+        skipped++;
+        continue;
+      }
+      try {
+        for (var dataBlock = 0; dataBlock < 3; dataBlock++) {
+          await tag.writeBlock(
+            blockIndex: sector * 4 + dataBlock,
+            data: Uint8List(16),
+          );
+        }
+        await tag.writeBlock(blockIndex: sector * 4 + 3, data: factoryTrailer);
+        formatted++;
+      } catch (error) {
+        throw AppException(
+          'Se perdió el contacto al formatear el sector $sector. '
+          'Mantén la tarjeta inmóvil y vuelve a intentarlo.',
+        );
+      }
+    }
+    return CardFormatResult(
+      driverId: id,
+      formattedUnits: formatted,
+      skippedUnits: skipped,
+    );
   }
 
   @override

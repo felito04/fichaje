@@ -44,7 +44,7 @@ class _AdminScreenState extends State<AdminScreen> {
         onOpenSettings: () => setState(() => _index = 2),
       ),
       _CardTools(services: widget.services, readerReady: _readerReady),
-      _Settings(services: widget.services),
+      _Settings(services: widget.services, readerReady: _readerReady),
       _Keys(services: widget.services),
     ];
     return Scaffold(
@@ -189,7 +189,7 @@ class _ProgramCardState extends State<_ProgramCard> {
       final today = await api.today(session);
       if (today.userId == null) {
         throw const AppException(
-          'Medusa no devolvió el identificador del usuario.',
+          'El sistema no devolvió el identificador del usuario.',
         );
       }
       if (!mounted) return;
@@ -293,7 +293,7 @@ class _ProgramCardState extends State<_ProgramCard> {
       ),
       const SizedBox(height: 10),
       const Text(
-        'Primero se validan las credenciales en Medusa. La contraseña solo se escribe cifrada en la tarjeta.',
+        'Primero se validan las credenciales en el sistema. La contraseña solo se escribe cifrada en la tarjeta.',
         style: TextStyle(fontSize: 17),
       ),
       const SizedBox(height: 8),
@@ -312,7 +312,7 @@ class _ProgramCardState extends State<_ProgramCard> {
           childrenPadding: EdgeInsets.fromLTRB(20, 0, 20, 18),
           expandedCrossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('1. La app valida el email y la contraseña en Medusa.'),
+            Text('1. La app valida el email y la contraseña en el sistema.'),
             SizedBox(height: 6),
             Text(
               '2. Al acercar la tarjeta, detecta su UID y busca espacio libre.',
@@ -343,7 +343,7 @@ class _ProgramCardState extends State<_ProgramCard> {
                 keyboardType: TextInputType.emailAddress,
                 autofillHints: const [AutofillHints.username],
                 decoration: const InputDecoration(
-                  labelText: 'Email de Medusa',
+                  labelText: 'Email del sistema',
                   border: OutlineInputBorder(),
                 ),
                 validator: (value) => value != null && value.contains('@')
@@ -649,15 +649,18 @@ class _CardToolsState extends State<_CardTools> {
 }
 
 class _Settings extends StatefulWidget {
-  const _Settings({required this.services});
+  const _Settings({required this.services, required this.readerReady});
   final AppServices services;
+  final bool readerReady;
   @override
   State<_Settings> createState() => _SettingsState();
 }
 
 class _SettingsState extends State<_Settings> {
   late final TextEditingController _url, _tablet, _sectors, _lat, _lng, _newPin;
+  late bool _biometricAdminEnabled;
   bool _busy = false;
+  String? _formatStatus;
 
   @override
   void initState() {
@@ -669,6 +672,7 @@ class _SettingsState extends State<_Settings> {
     _lat = TextEditingController(text: c.latitude?.toString() ?? '');
     _lng = TextEditingController(text: c.longitude?.toString() ?? '');
     _newPin = TextEditingController();
+    _biometricAdminEnabled = c.biometricAdminEnabled;
   }
 
   Future<void> _save() async {
@@ -712,6 +716,7 @@ class _SettingsState extends State<_Settings> {
           baseUrl: _url.text.trim(),
           tabletId: _tablet.text.trim(),
           mifareSectors: sectors.cast<int>(),
+          biometricAdminEnabled: _biometricAdminEnabled,
           latitude: lat,
           longitude: lng,
         ),
@@ -745,6 +750,82 @@ class _SettingsState extends State<_Settings> {
     }
   }
 
+  Future<void> _formatCard() async {
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            icon: const Icon(Icons.warning_amber_rounded),
+            title: const Text('Formatear tarjeta NFC'),
+            content: Text(
+              'Se borrarán los datos NFC que se puedan escribir. En MIFARE '
+              'solo se vaciarán los sectores configurados '
+              '(${widget.services.config.mifareSectors.join(', ')}) y nunca '
+              'el sector 0.\n\nEsta acción puede borrar datos de otros sistemas. '
+              'Úsala únicamente en tarjetas destinadas al fichaje.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancelar'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(context, true),
+                icon: const Icon(Icons.format_clear),
+                label: const Text('Formatear'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !widget.readerReady) return;
+    setState(() {
+      _busy = true;
+      _formatStatus = 'Acerca la tarjeta y mantenla inmóvil…';
+    });
+    try {
+      final card = await widget.services.reader.cards().first.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () =>
+            throw const AppException('No se detectó ninguna tarjeta.'),
+      );
+      if (mounted) {
+        setState(() => _formatStatus = 'Formateando… No retires la tarjeta.');
+      }
+      final driver = widget.services.registry.writerFor(card);
+      final result = await driver.formatStorage(card);
+      if (result.formattedUnits == 0) {
+        throw const AppException(
+          'No se pudo liberar ningún sector. La tarjeta puede usar claves de '
+          'otro sistema o estar bloqueada contra escritura.',
+        );
+      }
+      if (!mounted) return;
+      final unit = result.driverId == 'mifare_classic'
+          ? result.formattedUnits == 1
+                ? 'sector'
+                : 'sectores'
+          : 'área NDEF';
+      setState(() {
+        _formatStatus = result.skippedUnits == 0
+            ? 'Tarjeta formateada ✔ · ${result.formattedUnits} $unit liberados.'
+            : 'Formato parcial: ${result.formattedUnits} $unit liberados y '
+                  '${result.skippedUnits} sectores protegidos/no accesibles.';
+      });
+      HapticFeedback.heavyImpact();
+    } catch (error) {
+      if (mounted) {
+        setState(
+          () => _formatStatus = error is AppException
+              ? error.message
+              : 'No se pudo formatear la tarjeta.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.all(32),
@@ -753,7 +834,7 @@ class _SettingsState extends State<_Settings> {
       const SizedBox(height: 24),
       _field(
         _url,
-        'URL base de Medusa',
+        'URL base del sistema',
         helper: 'Usa staging para todas las pruebas antes de producción.',
       ),
       _field(_tablet, 'Identificador de la tablet'),
@@ -775,6 +856,21 @@ class _SettingsState extends State<_Settings> {
         ],
       ),
       _field(_newPin, 'Cambiar PIN (4–8 cifras)', number: true, obscure: true),
+      Card(
+        margin: const EdgeInsets.only(bottom: 18),
+        child: SwitchListTile(
+          value: _biometricAdminEnabled,
+          onChanged: _busy
+              ? null
+              : (value) => setState(() => _biometricAdminEnabled = value),
+          secondary: const Icon(Icons.fingerprint),
+          title: const Text('Biometría para administración'),
+          subtitle: const Text(
+            'Permite entrar con huella, rostro u otro biométrico configurado. '
+            'El PIN seguirá disponible como alternativa.',
+          ),
+        ),
+      ),
       Wrap(
         spacing: 14,
         children: [
@@ -789,6 +885,49 @@ class _SettingsState extends State<_Settings> {
             label: const Text('Guardar y probar conexión'),
           ),
         ],
+      ),
+      const SizedBox(height: 28),
+      Card(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Preparar una tarjeta usada',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Si una tarjeta contiene datos anteriores y no quedan sectores '
+                'libres, puedes vaciarla antes de programarla.',
+              ),
+              const SizedBox(height: 16),
+              OutlinedButton.icon(
+                onPressed: _busy || !widget.readerReady ? null : _formatCard,
+                icon: const Icon(Icons.format_clear),
+                label: const Text('Formatear tarjeta NFC'),
+              ),
+              if (_formatStatus != null) ...[
+                const SizedBox(height: 14),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (_busy) ...[
+                      const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2.5),
+                      ),
+                      const SizedBox(width: 10),
+                    ],
+                    Expanded(child: Text(_formatStatus!)),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     ],
   );

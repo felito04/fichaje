@@ -105,6 +105,46 @@ class MedusaApi {
     throw _mapError(lastNetworkError!);
   }
 
+  Future<String> submitTimeEntryIncident(
+    MedusaSession session, {
+    required String title,
+    required String description,
+    required String userEmail,
+    required String? userName,
+    required String sourceUrl,
+  }) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/admin/bug-reports',
+        data: {
+          'type': 'bug',
+          'title': title,
+          'description': description,
+          'user_email': userEmail,
+          'user_name': userName,
+          'url': sourceUrl,
+        },
+        options: _auth(session),
+      );
+      final report = response.data?['bug_report'] as Map<String, dynamic>?;
+      final id = report?['id'] as String?;
+      if (id == null || id.isEmpty) {
+        throw const AppException(
+          'El servidor no confirmó correctamente el reporte.',
+        );
+      }
+      return id;
+    } on DioException catch (error) {
+      if (_isNetworkFailure(error)) {
+        throw const AppException(
+          'No se pudo confirmar el envío; avisa a administración antes de volver a intentarlo.',
+          kind: AppErrorKind.network,
+        );
+      }
+      throw _mapError(error);
+    }
+  }
+
   Future<void> testConnection() async {
     try {
       await _dio.get<void>(

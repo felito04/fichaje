@@ -7,9 +7,11 @@ import 'package:intl/intl.dart';
 import 'package:uuid/uuid.dart';
 
 import 'admin_screen.dart';
+import 'incident_report_screen.dart';
 import 'medusa_api.dart';
 import 'madrid_time.dart';
 import 'models.dart';
+import 'nfc_card_animation.dart';
 import 'services.dart';
 
 enum _KioskPhase {
@@ -21,8 +23,6 @@ enum _KioskPhase {
   success,
   error,
 }
-
-enum _NfcCardAnimationMode { scanning, recognized }
 
 class KioskScreen extends StatefulWidget {
   const KioskScreen({super.key, required this.services});
@@ -278,18 +278,39 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
     _countdownTimer?.cancel();
     final configured = await widget.services.pinStore.isConfigured;
     if (!mounted) return;
-    final pin = await _askPin(firstSetup: !configured);
-    if (pin == null || !mounted) return;
+    final canUseBiometrics =
+        configured &&
+        widget.services.config.biometricAdminEnabled &&
+        await widget.services.biometricAuth.isAvailable;
+    if (!mounted) return;
+    final credential = await _askAdminCredential(
+      firstSetup: !configured,
+      canUseBiometrics: canUseBiometrics,
+    );
+    if (credential == null || !mounted) return;
     if (!configured) {
       try {
-        await widget.services.pinStore.setPin(pin);
+        await widget.services.pinStore.setPin(credential);
       } catch (error) {
         if (mounted) _snack(_friendly(error));
         return;
       }
-    } else if (!await widget.services.pinStore.verify(pin)) {
-      if (mounted) _snack('PIN incorrecto.');
-      return;
+    } else if (credential == _biometricCredential) {
+      try {
+        if (!await widget.services.biometricAuth.authenticate()) return;
+      } catch (_) {
+        if (mounted) {
+          _snack(
+            'No se pudo completar la autenticación biométrica. Usa el PIN.',
+          );
+        }
+        return;
+      }
+    } else {
+      if (!await widget.services.pinStore.verify(credential)) {
+        if (mounted) _snack('PIN incorrecto.');
+        return;
+      }
     }
     await KioskPlatform.stop();
     await widget.services.reader.stop();
@@ -301,7 +322,30 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
     await _startReader();
   }
 
-  Future<String?> _askPin({required bool firstSetup}) {
+  Future<void> _openIncidentReport() async {
+    if (_phase != _KioskPhase.waiting) return;
+    _countdownTimer?.cancel();
+    setState(() {
+      // This prevents the kiosk's NFC listener from processing the same card
+      // while the report flow uses it only for identification.
+      _phase = _KioskPhase.processing;
+      _message = 'Abriendo reporte de incidencia…';
+    });
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => IncidentReportScreen(services: widget.services),
+      ),
+    );
+    if (!mounted) return;
+    _reset();
+  }
+
+  static const _biometricCredential = '__MUSF_BIOMETRIC__';
+
+  Future<String?> _askAdminCredential({
+    required bool firstSetup,
+    required bool canUseBiometrics,
+  }) {
     final controller = TextEditingController();
     return showDialog<String>(
       context: context,
@@ -310,15 +354,44 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
         title: Text(
           firstSetup ? 'Crear PIN de administración' : 'Modo Administración',
         ),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          obscureText: true,
-          keyboardType: TextInputType.number,
-          maxLength: 8,
-          decoration: InputDecoration(
-            labelText: firstSetup ? 'Nuevo PIN (4–8 cifras)' : 'PIN',
-          ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (canUseBiometrics) ...[
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () => Navigator.pop(context, _biometricCredential),
+                  icon: const Icon(Icons.fingerprint),
+                  label: const Text('Usar huella o rostro'),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Row(
+                  children: [
+                    Expanded(child: Divider()),
+                    Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12),
+                      child: Text('o introduce el PIN'),
+                    ),
+                    Expanded(child: Divider()),
+                  ],
+                ),
+              ),
+            ],
+            TextField(
+              controller: controller,
+              autofocus: !canUseBiometrics,
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              maxLength: 8,
+              decoration: InputDecoration(
+                labelText: firstSetup ? 'Nuevo PIN (4–8 cifras)' : 'PIN',
+              ),
+              onSubmitted: (value) => Navigator.pop(context, value),
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -405,6 +478,11 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
                         alignment: Alignment.centerLeft,
                         child: _brand(),
                       ),
+                    ),
+                    IconButton.filledTonal(
+                      onPressed: _openIncidentReport,
+                      tooltip: 'Reportar incidencia de fichaje',
+                      icon: const Icon(Icons.assignment_late_rounded),
                     ),
                     IconButton(
                       onPressed: _openAdmin,
@@ -540,8 +618,8 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _AnimatedNfcCard(
-              mode: _NfcCardAnimationMode.scanning,
+            AnimatedNfcCard(
+              mode: NfcCardAnimationMode.scanning,
               width: compact ? 180 : 280,
             ),
             SizedBox(height: compact ? 12 : 24),
@@ -584,8 +662,8 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _AnimatedNfcCard(
-                mode: _NfcCardAnimationMode.recognized,
+              AnimatedNfcCard(
+                mode: NfcCardAnimationMode.recognized,
                 width: compact ? 180 : 280,
               ),
               SizedBox(height: compact ? 10 : 22),
@@ -839,140 +917,6 @@ class _KioskScreenState extends State<KioskScreen> with WidgetsBindingObserver {
     _readerWatchdog?.cancel();
     _cards?.cancel();
     widget.services.reader.stop();
-    super.dispose();
-  }
-}
-
-class _AnimatedNfcCard extends StatefulWidget {
-  const _AnimatedNfcCard({required this.mode, required this.width});
-  final _NfcCardAnimationMode mode;
-  final double width;
-
-  @override
-  State<_AnimatedNfcCard> createState() => _AnimatedNfcCardState();
-}
-
-class _AnimatedNfcCardState extends State<_AnimatedNfcCard>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: Duration(
-        milliseconds: widget.mode == _NfcCardAnimationMode.recognized
-            ? 1050
-            : 1500,
-      ),
-    );
-    _start();
-  }
-
-  void _start() {
-    if (widget.mode == _NfcCardAnimationMode.recognized) {
-      _controller.forward(from: 0);
-    } else {
-      _controller.repeat();
-    }
-  }
-
-  @override
-  void didUpdateWidget(covariant _AnimatedNfcCard oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.mode != widget.mode) {
-      _controller.duration = Duration(
-        milliseconds: widget.mode == _NfcCardAnimationMode.recognized
-            ? 1050
-            : 1500,
-      );
-      _start();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: _controller,
-    builder: (context, child) {
-      final value = Curves.easeInOutCubic.transform(_controller.value);
-      final scanning = widget.mode == _NfcCardAnimationMode.scanning;
-      final recognized = widget.mode == _NfcCardAnimationMode.recognized;
-      final rotation = scanning ? value * math.pi * 2 : value * math.pi * 2;
-      final scale = recognized
-          ? 0.82 + (Curves.elasticOut.transform(value) * 0.18)
-          : 0.96 + math.sin(value * math.pi * 2).abs() * 0.04;
-      final glow = recognized
-          ? (1 - (value - 0.72).abs()).clamp(0.25, 1.0)
-          : 0.35 + math.sin(value * math.pi * 2).abs() * 0.45;
-
-      return SizedBox(
-        width: widget.width,
-        height: widget.width * 0.68,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Container(
-              width: widget.width * (0.72 + glow * 0.18),
-              height: widget.width * (0.45 + glow * 0.12),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(999),
-                boxShadow: [
-                  BoxShadow(
-                    color: Theme.of(
-                      context,
-                    ).colorScheme.primary.withValues(alpha: 0.18 + glow * 0.34),
-                    blurRadius: 42 + glow * 25,
-                    spreadRadius: glow * 8,
-                  ),
-                ],
-              ),
-            ),
-            Transform(
-              alignment: Alignment.center,
-              transform: Matrix4.identity()
-                ..setEntry(3, 2, 0.0018)
-                ..rotateX(scanning ? math.sin(value * math.pi * 2) * 0.10 : 0)
-                ..rotateY(rotation),
-              child: Transform.scale(scale: scale, child: child),
-            ),
-            if (recognized)
-              Opacity(
-                opacity: Curves.easeIn.transform(value),
-                child: Align(
-                  alignment: const Alignment(0.82, -0.78),
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Theme.of(context).colorScheme.primary,
-                      boxShadow: const [
-                        BoxShadow(color: Colors.black54, blurRadius: 14),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.check_rounded,
-                      color: Colors.black,
-                      size: 30,
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      );
-    },
-    child: Image.asset(
-      'assets/branding/worker_nfc_card.png',
-      width: widget.width,
-      filterQuality: FilterQuality.high,
-      fit: BoxFit.contain,
-    ),
-  );
-
-  @override
-  void dispose() {
-    _controller.dispose();
     super.dispose();
   }
 }

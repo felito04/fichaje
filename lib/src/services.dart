@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:local_auth/local_auth.dart';
 
 import 'config_store.dart';
 import 'medusa_api.dart';
@@ -12,6 +13,7 @@ class AppServices {
     required this.configStore,
     required this.keyVault,
     required this.pinStore,
+    required this.biometricAuth,
     required this.reader,
     required this.codec,
     required AppConfig config,
@@ -26,6 +28,7 @@ class AppServices {
       configStore: configStore,
       keyVault: keyVault,
       pinStore: AdminPinStore(secureStorage),
+      biometricAuth: BiometricAdminAuth(),
       reader: InternalAndroidReader(),
       codec: CredentialCodec(keyVault),
       config: configStore.load(),
@@ -35,6 +38,7 @@ class AppServices {
   final ConfigStore configStore;
   final KeyVault keyVault;
   final AdminPinStore pinStore;
+  final BiometricAdminAuth biometricAuth;
   final NfcReader reader;
   final CredentialCodec codec;
   AppConfig _config;
@@ -50,6 +54,28 @@ class AppServices {
     await configStore.save(value);
     _config = configStore.load();
   }
+}
+
+class BiometricAdminAuth {
+  BiometricAdminAuth({LocalAuthentication? authentication})
+    : _authentication = authentication ?? LocalAuthentication();
+
+  final LocalAuthentication _authentication;
+
+  Future<bool> get isAvailable async {
+    try {
+      if (!await _authentication.isDeviceSupported()) return false;
+      return (await _authentication.getAvailableBiometrics()).isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> authenticate() => _authentication.authenticate(
+    localizedReason: 'Identifícate para abrir el modo administración',
+    biometricOnly: true,
+    persistAcrossBackgrounding: true,
+  );
 }
 
 class KioskPlatform {

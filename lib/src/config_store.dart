@@ -15,6 +15,8 @@ class ConfigStore {
                 const ['13', '14', '15'])
             .map(int.parse)
             .toList(),
+    biometricAdminEnabled:
+        _preferences.getBool('biometric_admin_enabled') ?? true,
     latitude: _preferences.getDouble('latitude'),
     longitude: _preferences.getDouble('longitude'),
   );
@@ -28,6 +30,10 @@ class ConfigStore {
     await _preferences.setStringList(
       'mifare_sectors',
       value.mifareSectors.map((e) => '$e').toList(),
+    );
+    await _preferences.setBool(
+      'biometric_admin_enabled',
+      value.biometricAdminEnabled,
     );
     if (value.hasLocation) {
       await _preferences.setDouble('latitude', value.latitude!);
