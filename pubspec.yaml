@@ -1,5 +1,5 @@
 name: fichaje
-description: "A new Flutter project."
+description: "Quiosco NFC de fichaje para MyUrbanScoot."
 publish_to: 'none'
 version: 0.1.0+1
 
@@ -7,8 +7,20 @@ environment:
   sdk: ^3.11.5
 
 dependencies:
+  cryptography: ^2.9.0
+  dio: ^5.11.1
   flutter:
     sdk: flutter
+  flutter_secure_storage: ^11.2.0
+  intl: ^0.20.3
+  mobile_scanner: ^7.4.2
+  ndef_record: ^1.4.2
+  nfc_manager: ^4.2.1
+  qr_flutter: ^4.1.0
+  shared_preferences: ^2.5.5
+  timezone: ^0.11.1
+  uuid: ^4.6.0
+  wakelock_plus: ^1.7.0
 
 dev_dependencies:
   flutter_test:
@@ -17,3 +29,7 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/branding/myurban_background.png
+    - assets/branding/myurban_logo.png
+    - assets/branding/worker_nfc_card.png
